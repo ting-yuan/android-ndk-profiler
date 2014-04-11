@@ -80,7 +80,7 @@
 /*
  * Histogram counters are unsigned shorts:
  */
-#define	HISTCOUNTER unsigned short
+#define	HISTCOUNTER unsigned long
 
 /*
  * Fraction of text space to allocate for histogram counters here, 1/2:
@@ -121,7 +121,7 @@ struct tostruct
   {
     char *selfpc;
     int count;
-    unsigned short link;
+    unsigned long link;
   };
 
 /*

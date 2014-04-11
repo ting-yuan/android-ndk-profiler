@@ -69,8 +69,8 @@
 /*
  * froms is actually a bunch of unsigned shorts indexing tos
  */
-static int profiling = 3;
-static unsigned short *froms;
+static volatile int profiling = 3;
+static unsigned long *froms;
 static struct tostruct *tos = 0;
 static long tolimit = 0;
 static uint32_t s_lowpc = 0;
@@ -146,9 +146,9 @@ static void profile_action(int sig, siginfo_t *info, void *context)
 {
 	ucontext_t *ucontext = (ucontext_t*) context;
 	struct sigcontext *mcontext = &ucontext->uc_mcontext;
-	if (profiling)
-		return;
-	check_profil(mcontext->arm_pc);
+	if (__sync_fetch_and_add(&profiling, 1) == 0)
+	    check_profil(mcontext->arm_pc);
+    __sync_fetch_and_sub(&profiling, 1);
 }
 
 static void add_profile_handler(void)
@@ -260,8 +260,8 @@ void monstartup(const char *libname)
 	tolimit = s_textsize * ARCDENSITY / 100;
 	if (tolimit < MINARCS) {
 		tolimit = MINARCS;
-	} else if (tolimit > 65534) {
-		tolimit = 65534;
+	} else if (tolimit > 256 * 1024 - 1) {
+		tolimit = 256 * 1024 - 1;
 	}
 	tos =
 		(struct tostruct *) calloc(1,
@@ -366,7 +366,7 @@ void moncleanup(void)
 	fclose(fd);
 }
 
-void profCount(unsigned short *frompcindex, char *selfpc)
+void profCount(unsigned long *frompcindex, char *selfpc)
 {
 	struct tostruct *top;
 	struct tostruct *prevtop;
@@ -380,22 +380,22 @@ void profCount(unsigned short *frompcindex, char *selfpc)
 	/*selfpc = (char *) reg[14].I; */
 	/* frompcindex = pc in preceding frame.
 	   This identifies the caller of the function just entered.  */
-	/*frompcindex = (unsigned short *) reg[12].I; */
+	/*frompcindex = (unsigned long *) reg[12].I; */
 	/*
 	 * check that we are profiling
 	 * and that we aren't recursively invoked.
 	 */
-	if (profiling) {
+	if (__sync_fetch_and_add(&profiling, 1)) {
+	    __sync_fetch_and_sub(&profiling, 1);
 		return;
 	}
-	profiling++;
 	/*
 	 * check that frompcindex is a reasonable pc value.
 	 * for example: signal catchers get called from the stack,
 	 *   not from text space.  too bad.
 	 */
 	frompcindex =
-		(unsigned short *)((long) frompcindex - (long) s_lowpc);
+		(unsigned long *)((long) frompcindex - (long) s_lowpc);
 	if ((unsigned long) frompcindex > s_textsize) {
 		goto done;
 	}
@@ -410,7 +410,7 @@ void profCount(unsigned short *frompcindex, char *selfpc)
 		if (toindex >= tolimit) {
 			goto overflow;
 		}
-		*frompcindex = (unsigned short) toindex;
+		*frompcindex = (unsigned long) toindex;
 		top = &tos[toindex];
 		top->selfpc = selfpc;
 		top->count = 1;
@@ -447,7 +447,7 @@ void profCount(unsigned short *frompcindex, char *selfpc)
 			top->selfpc = selfpc;
 			top->count = 1;
 			top->link = *frompcindex;
-			*frompcindex = (unsigned short) toindex;
+			*frompcindex = (unsigned long) toindex;
 			goto done;
 		}
 		/*
@@ -465,17 +465,17 @@ void profCount(unsigned short *frompcindex, char *selfpc)
 			toindex = prevtop->link;
 			prevtop->link = top->link;
 			top->link = *frompcindex;
-			*frompcindex = (unsigned short) toindex;
+			*frompcindex = (unsigned long) toindex;
 			goto done;
 		}
 	}
 done:
-	profiling--;
+	__sync_fetch_and_sub(&profiling, 1);
 	/* and fall through */
 out:
 	return;			/* normal return restores saved registers */
 overflow:
-	profiling++;		/* halt further profiling */
+	__sync_fetch_and_add(&profiling, 1); /* halt further profiling */
 #define TOLIMIT "mcount: tos overflow\n"
 	systemMessage(0, TOLIMIT);
 	goto out;
